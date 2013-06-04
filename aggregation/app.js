@@ -4,7 +4,7 @@
  * 
  * Aggregation point for sensors in Shubra Qubala.
  * 
- * - Creates a client connection to controlnv.com on port 3000 and sends it data it collects from the sensors
+ * - Creates a client connection to server on port 3000 and sends it data it collects from the sensors
  * - Records data to the database as it receives it from the sensors at dbTimeInterval
  * - Processes packets from XBEE
  * 
@@ -21,9 +21,9 @@
 var dbTimeInterval = 1200000; //milliseconds until next entry should be recorded - 20 minutes
 var mysqlHost = 'localhost';
 var mysqlUser = 'root';
-var mysqlPass = 'W4t3r4u';
+var mysqlPass = 'password here';
 var mysqlDB = 'water';
-var serverHost = 'controlnv.com';
+var serverHost = 'host here';
 var serverPort = 3000;
 var packetKey = 'f548cbd0-e291-407c-9992-b1435fac56f4';
 
