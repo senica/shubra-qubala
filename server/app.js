@@ -7,7 +7,7 @@
  * 
  * AUC Server
  * You may test by using
- * 	telnet controlnv.com 3000
+ * 	telnet host 3000
  * 
  * This opens a connection and listens for two connections:
  * 1) to an aggregation point in the field on port 3000 which collects data
@@ -20,9 +20,9 @@
 var dbTimeInterval = 20000; //milliseconds until next entry should be recorded
 var mysqlHost = 'localhost';
 var mysqlUser = 'root';
-var mysqlPass = 'Kingsburg1';
+var mysqlPass = 'password here';
 var mysqlDB = 'water';
-var serverKey = 'f548cbd0-e291-407c-9992-b1435fac56f4';
+var serverKey = 'key here';
 
 /**
  * Includes
@@ -450,6 +450,6 @@ var net = require('net');
 var client = net.connect({host:"controlnv.com", port: 3000},
     function() {});
   setInterval(function(){
-  	var s = {key:'f548cbd0-e291-407c-9992-b1435fac56f4', netid:'2452', serial:'ABECKALS', data:{water:random(), sound:random(), temp:random(), humidity:random()}};
+  	var s = {key:'key here', netid:'2452', serial:'ABECKALS', data:{water:random(), sound:random(), temp:random(), humidity:random()}};
   	client.write(JSON.stringify(s));
   }, 3000);
