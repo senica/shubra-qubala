@@ -25,7 +25,7 @@ var mysqlPass = 'password here';
 var mysqlDB = 'water';
 var serverHost = 'host here';
 var serverPort = 3000;
-var packetKey = 'f548cbd0-e291-407c-9992-b1435fac56f4';
+var packetKey = 'key here';
 
 /**
  * Includes
