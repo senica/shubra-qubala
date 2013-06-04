@@ -1,0 +1,504 @@
+<!--
+	TODO:	Handle bad water readings
+			Allow for SMS to be sent
+			Clean up code! this is a disaster :)
+			Delete Canals
+			Delete Users
+			Foreign Key Constraints already done for users and canals
+			Preload Data
+			Allow for viewing past data	
+-->
+
+<html>	
+<head>
+	<link href="style.css" rel="stylesheet" media="all">
+	<script src="/socket/socket.io/socket.io.js"></script>
+	<script type="text/javascript" src="/js/jquery-1.9.js"></script>
+	<script type="text/javascript" src="/js/jquery-ui-1.10.3.custom.min.js"></script>
+	<script src="js/highcharts.js"></script>
+	<script src="js/modules/exporting.js"></script>
+	<script type="text/javascript">
+		
+		/**
+		 * User editable values
+		 */
+		var shiftQuantity = 10; //When x number of points are on the chart, it will shift the left points off		
+		var liveChart = true;
+		
+		//Socket Channel
+		var socket = io.connect('http://controlnv.com:3001');
+		
+		//Data holders
+		var sensors = {};
+		
+		//Handle showing tips
+		$(document).on("mouseover mouseout", ".tipWrapper", function(e){
+			if(e.type == "mouseover")
+				$(".tip", $(this)).show();
+			else if(e.type == "mouseout")
+				$(".tip", $(this)).hide();
+		});
+		
+		//Handle moving sensors
+		var chartDragging = false;
+		var dropIndicator = $('<div class="drop-indicator"></div>');
+		var dragHolder = $('<div></div>');
+		var dropTarget = false;
+		$(document).on("mouseover mouseout", ".chart-drop-target", function(e){
+			if(e.type == "mouseover" && chartDragging == true){
+				$(e.target).after(dropIndicator);
+				dropIndicator.show();
+				dropTarget = $(e.target);
+			}else if(e.type == "mouseout"){
+				dropTarget = false;
+				dropIndicator.hide();
+			}
+		});
+		$(window).on("mousedown", function(e){
+			if($(e.target).hasClass("chart-drag-button")){
+				e.preventDefault();
+				chartDragging = true;
+				var b = $(e.target);
+				var p = b.parent();
+				$(window).on("mouseup.chartDrag", function(){
+					$(window).off(".chartDrag");
+					chartDragging = false;
+					$("body").append(dropIndicator);
+					dropIndicator.hide();
+					if(dropTarget != false){
+						if(dropTarget.is("h2")){ //If it's the title, add it as the first element
+							dropTarget.next().prepend(p);
+						}else{
+							dropTarget.after(p);
+						}
+						p.removeClass("chart-dragging");
+						p.css({position:"relative", "pointer-events":"auto", top:"auto", left:"auto"});
+						//socket.emit('canalChange', {canal:p.parents(".canal-wrapper:first").attr("data-id"), sensor:p.attr("data-id")});
+						//Reorder in data
+						$(".canal-inner-wrapper").each(function(i, canal){
+							var c = 0;
+							$(canal).children("div[data-id]").each(function(i, sensor){
+								socket.emit('canalChange', {canal:$(canal).parent().attr("data-id"), sensor:$(sensor).attr("data-id"), sortorder:c});
+								sensors[$(sensor).attr("data-id")].sensor.canalid = $(canal).parent().attr("data-id");
+								sensors[$(sensor).attr("data-id")].sensor.sortorder = c;
+								$(sensor).attr("data-sortorder", c);
+								//addSensor(sensors[$(sensor).attr("data-id")]);
+								c++;
+							});
+						});
+						//Force the reordering of sensors - this needs to be redone...not efficient at all!
+						$(".canal-inner-wrapper").each(function(i, canal){
+							$(canal).children("div[data-id]").each(function(i, sensor){
+								addSensor(sensors[$(sensor).attr("data-id")]);
+							});
+						});									
+					}else{
+						p.animate({top:dragHolder.offset().top+'px'}, function(){
+							dragHolder.after(p);
+							p.removeClass("chart-dragging");
+							p.css({position:"relative", "pointer-events":"auto", top:"auto", left:"auto"});
+						});
+					}
+					dropTarget = false;
+				});
+				p.after(dragHolder);
+				p.addClass("chart-dragging");
+				var offset = b.position().top + e.offsetY;
+				p.css({left:p.offset().left+"px", position:"absolute", "pointer-events":"none", top:e.pageY - offset+"px"});
+				$("body").append(p);
+				$(window).on("mousemove.chartDrag", function(e){
+					e.preventDefault();
+					p.css({top:e.pageY - offset+"px"});
+					return false;
+				});
+				
+				return false;
+			}
+		});
+		
+		var actionTimeout; //Keep track of when to close the action bar
+		$(document).ready(function(){
+			
+			//Input default values - might not be able to do this as it will interfere with normals
+			$(".input").on("focus blur keyup", function(e){
+				if(e.type == "focus"){
+					if($(this).val() == $(this).attr("data-default"))
+						$(this).val("");
+				}else{
+					if($(this).val() == $(this).attr("data-default"))
+						return true;
+					else if($.trim($(this).val()) == ""){
+						$(this).val($(this).attr("data-default"));
+						$(this).blur();
+						return true;
+					}
+				}
+			});
+			
+			//Add Canal
+			$("#newCanalButton").click(function(e){
+				clearTimeout(actionTimeout);
+				$("#newCanalStatus").html("");
+				$("#newCanalWrapper").slideToggle();
+				return false;
+			});
+			$("input[name=newCanalName]").on("focus", function(){
+				clearTimeout(actionTimeout);
+				$("#newCanalStatus").html("");
+				$(this).val("");
+			});
+			$("input[name=newCanalName]").on("blur keyup", function(e){
+				if($(this).val() == $(this).attr("data-default")){
+					$("#newCanalWrapper").slideUp();
+					return true;
+				}else if($.trim($(this).val()) == ""){
+					$(this).val($(this).attr("data-default"));
+					$(this).blur();
+					return true;
+				}else{
+					if(e.type == "blur" || (e.type == "keyup" && e.which == "13")){ //enter is pushed
+						$("#newCanalStatus").html("Saving...");
+						socket.emit('db', {type:'addCanal', title:$(this).val()}, function(reply){
+							if(reply == 'ok'){
+								$("#newCanalStatus").html("Added!");
+								$("input[name=newCanalName]").val($("input[name=newCanalName]").attr("data-default"));
+								$("input[name=newCanalName]").blur();
+							}else{
+								$("#newCanalStatus").html("Something is broken :(");
+							}
+							actionTimeout = setTimeout(function(){
+								$("#newCanalStatus").html("");
+								$("#newCanalWrapper").slideUp();
+							}, 2000);
+						});
+					}
+				}
+				
+			});
+			
+			//Add User
+			var addUser = function(o){
+				o = $.extend({}, o);
+				for(var i in o){ //Allow for array to be sent from server
+					var u = o[i];								
+					if($("#user-"+u.userid).length == 0)
+						u.wrapper = $('<section id="user-'+u.userid+'" data-id="'+u.userid+'" class="user-wrapper"></section>');
+					else{
+						u.wrapper = $("#user-"+u.userid);
+						u.wrapper.html("");
+					}
+					u.titleWrapper = $('<h2>'+u.uname+'</h2>');
+					u.cellWrapper = $('<p>******'+u.ucell.substring(u.ucell.length - 4)+'</p>');
+					u.canalsWrapper = $('<div style="float:right;"></div>');
+					for(var i in u.canals){
+						var cw = $('<div class="userCanal" data-id="'+u.canals[i].id+'">'+u.canals[i].title+'</div>');
+						u.canalsWrapper.append(cw);
+					}
+					u.wrapper.append(u.canalsWrapper).append(u.titleWrapper).append(u.cellWrapper);
+					if($("#user-"+u.userid).length == 0)
+						$("#users").append(u.wrapper);
+				}
+			}
+			socket.on('addUser', function(o){ //Let the server add users for us
+				addUser(o);
+			})
+			$("#newUserButtonPush").click(function(){
+				var error = false;
+				var w = $("#newUserWrapper");
+				$("*", w).removeClass("error");
+				$("#newUserStatus").html("");
+				$("input", w).each(function(i, e){
+					if($.trim($(e).val()) == "" || $.trim($(e).val()) == $(e).attr("data-default")){
+						$(e).addClass("error");
+						error = true;
+					}
+				});
+				if(error == true){
+					$("#newUserStatus").html("Please type some more.");
+					$(this).effect("shake");
+					return false;
+				}else{
+					$("#newUserStatus").html("Adding User...");
+					var canals = [];
+					$(".userCanalsCheckbox").each(function(i, e){
+						if($(e).is(":checked")){
+							canals.push($(e).val());
+						}
+					});
+					var p = {};
+					p.uname = $("input[name=userName]").val();
+					p.ucell = $("input[name=userCell]").val();
+					p.canals = canals;
+					socket.emit('addUser', p, function(response){
+						if(response != 'fail'){
+							$("#newUserStatus").html("Added!");
+							setTimeout(function(){
+								$("#newUserStatus").html("");
+							}, 2000);
+							addUser(response);
+						}
+					});
+				}
+				return false;
+			});
+			$("#newUserButton").click(function(){
+				var err = false;
+				$("#newUserStatus").html("");
+				$("input[name='userName']").val($("input[name='userName']").attr("data-default"));
+				$("input[name='userCell']").val($("input[name='userCell']").attr("data-default"));
+				$("#userCanals").html("");
+				socket.emit('getCanals', {}, function(response){
+					if(response == 'fail')
+						err = true;
+					else{
+						$.each(response, function(i, v){
+							var checkWrapper = $('<div style="margin-bottom:5px;"></div>');
+							var check = $('<input type="checkbox" class="checkbox userCanalsCheckbox" value="'+v.id+'"/><span>'+v.title+'</span>');
+							checkWrapper.append(check);
+							$("#userCanals").append(checkWrapper);
+						});
+					}
+				});
+				if(err){
+					alert("Server not responding :(");
+					return false;
+				}
+				$("#newUserWrapper").slideToggle();
+				return false;
+			});
+		});
+		
+		//Handle adding canals
+		var canals = {};
+		socket.on('pushCanal', function(obj){
+			obj = $.extend({}, obj);
+			for(var i in obj){
+				var o = obj[i];
+				if(!(o.canalid in canals)){
+					canals[o.canalid] = o;
+					var c = canals[o.canalid];
+					c.wrapper = $('<section id="canal-'+c.canalid+'" data-id="'+c.canalid+'" class="canal-wrapper" style="position:relative"></section>');
+					c.extra = $('<div style="position: absolute; right: 0; top: 50px;"></div>');
+					c.canalWidthInput = $('<div style="position:relative" class="tipWrapper"><span style="margin-right:5px;">Mean Canal Width:</span><input type="text" class="canal-width minimal-input" value="'+c.width+'" /><div class="tip">Mean width of the canal in meters.</div></div>');
+					c.titleWrapper = $('<h2 class="chart-drop-target">'+c.title+'</h2>');
+					c.innerWrapper = $('<div class="canal-inner-wrapper"></div>');
+					c.extra.append(c.canalWidthInput);
+					c.wrapper.append(c.extra).append(c.titleWrapper).append(c.innerWrapper);
+					$("#canals").append(c.wrapper);
+					
+					//Add sensors sent over with the canal if any
+					if(typeof o.sensors != "undefined"){
+						for(var i in o.sensors){
+							if(!(o.sensors[i].serial in sensors) && o.sensors[i].serial != "undefined")
+								addSensor(o.sensors[i]);
+						}
+					}
+				}
+			}
+		});
+		
+		//Handle Changing of Canal Width
+		$(document).on("blur", ".canal-width", function(){
+			var id = $(this).parents(".canal-wrapper:first").attr("data-id");
+			socket.emit('canalWidth', {canal:id, width:$(this).val()});
+		});
+		socket.on('canalWidth', function(o){
+			$(".canal-width", $('#canal-'+o.canal)).val(o.width);
+		});
+		
+		var addSensor = function(o){
+			
+			console.log(o);
+			
+			if(typeof o.serial == "undefined")
+				return false;
+				
+			//Used to re-order sensors in a canal when the page is already rendered
+			if(!(o.serial in sensors)){			
+				sensors[o.serial] = o;
+				
+				var s = sensors[o.serial];
+				
+				//How many points are plotted?
+				if(typeof s.numPoints == "undefined")
+					s.numPoints = 0;
+				
+				//Do we shift points?
+				if(typeof s.shift == "undefined")
+					s.shift = false;
+					
+				if(typeof s.sensor.sortorder == "undefined")
+					s.sensor.sortorder = 0;
+				
+				s.outerwrapper = $('<div id="chart-wrapper-'+s.serial+'" data-id="'+s.serial+'" data-sortorder="'+s.sensor.sortorder+'" class="chart-outer-wrapper chart-drop-target"></div>');
+				s.drag = $('<div class="chart-drag-button"></div>');
+				s.extra = $('<div style="margin-left: 50px; position: relative; top: -8px;"></div>');
+				s.canalDepthInput = $('<div style="position:relative" class="tipWrapper"><span style="margin-right:5px;">Canal Depth:</span><input type="text" class="canal-depth minimal-input" value="'+s.sensor.depth+'" /><div class="tip">Measurement from the bottom of the canal to the front of the ultrasonic sensor in millimeters.</div></div>');
+				s.chartwrapper = $('<div id="chart-'+o.serial+'" class="chart-wrapper"></div>');
+				s.extra.append(s.canalDepthInput);
+				s.outerwrapper.append(s.drag);
+				s.outerwrapper.append(s.extra);
+				s.outerwrapper.append(s.chartwrapper);
+				/*s.name = o.name;
+				s.water = o.data.water;
+				s.sound = o.data.sound;
+				s.temp = o.data.temp;
+				s.humidity = o.data.humidity;*/
+				
+				$("#sensors").append(s.outerwrapper);
+				
+				s.chart = new Highcharts.Chart({
+					chart: {
+						renderTo: 'chart-'+s.serial,
+						type: 'line', //area might be good for past comparisons
+			            events: {
+			                load: function () {}
+			             }
+			       },
+			       title: {
+		                text: s.data.name
+		            },
+		            subtitle: {
+		                text: s.serial
+		            },
+		            /*xAxis: {
+		                labels: {
+		                    formatter: function() {
+		                        return this.value; // clean, unformatted number for year
+		                    }
+		                }
+		            },*/
+		           xAxis: {text: 'Time',type: 'datetime'},
+		            yAxis: {
+		                title: {
+		                    text: 'Levels'
+		                },
+		                labels: {
+		                    formatter: function() {
+		                        return this.value;
+		                    }
+		                }
+		            },
+		            tooltip: {
+		                pointFormat: '{series.name} level <b>{point.y:,.0f}</b><br/>at {point.x}'
+		            },
+		            legend: {
+		                layout: 'vertical',
+		                align: 'right',
+		                verticalAlign: 'top',
+		                x: -10,
+		                y: 100,
+		                borderWidth: 0
+		            },
+		            series: [{
+		                name: 'Water',
+		                data: [],
+		            }, {
+		                name: 'Temperature',
+		                data: []
+		            }, {
+		                name: 'Humidity',
+		                data: []
+		            }, {
+		                name: 'Sound',
+		                data: []
+		            }],
+				});
+			}
+			
+			if($('#canal-'+o.sensor.canalid).length > 0)
+				$('#canal-'+o.sensor.canalid+' .canal-inner-wrapper').append(sensors[o.serial].outerwrapper);
+			
+			//Reorder sensors in the canal based on sortorder
+			$('#canal-'+o.sensor.canalid+' .chart-outer-wrapper').sort(function(a,b){
+				return parseInt($(a).attr("data-sortorder")) > parseInt($(b).attr("data-sortorder")) ? 1 : -1;
+			}).appendTo('#canal-'+o.sensor.canalid+' .canal-inner-wrapper'); 
+		}
+		
+		//Handle Changing of Canal Depths
+		$(document).on("blur", ".canal-depth", function(){
+			var id = $(this).parents(".chart-outer-wrapper:first").attr("data-id");
+			socket.emit('canalDepth', {sensor:id, depth:$(this).val()});
+		});
+		socket.on('canalDepth', function(o){
+			$(".canal-depth", $('#chart-wrapper-'+o.sensor)).val(o.depth);
+		});
+		
+		
+		//Process sensor readings
+		socket.on('reading', function (o) {
+			
+			console.log(o);
+			
+			if(!(o.serial in sensors) && o.serial != "undefined")
+				addSensor(o);
+			
+			if(o.serial in sensors){ //Just to make sure
+				sensors[o.serial].chart.series[0].addPoint([Date.now(), parseFloat(o.data.water)], true, sensors[o.serial].shift);
+				sensors[o.serial].chart.series[1].addPoint([Date.now(), parseFloat(o.data.temp)], true, sensors[o.serial].shift);
+				sensors[o.serial].chart.series[2].addPoint([Date.now(), parseFloat(o.data.humidity)], true, sensors[o.serial].shift);
+				sensors[o.serial].chart.series[3].addPoint([Date.now(), parseFloat(o.data.sound)], true, sensors[o.serial].shift);
+				
+				sensors[o.serial].numPoints++; //Increment the number of points plotted
+				
+				//Start shifting points off the left
+				if(sensors[o.serial].numPoints >= shiftQuantity)
+					sensors[o.serial].shift = true
+			}
+		});
+		
+		//When issuing commands, this will be the callback to the browser
+		socket.on('echo', function(d){
+			console.log(d);
+		});
+		
+		var server = function(cmd){
+			console.log(socket.emit('cmd', cmd));
+		}
+		
+
+	</script>
+</head>	
+<body>
+	<div>
+		<div class="redBorder"></div>
+		<div class="greenBorder"></div>
+		<div class="yellowBorder"></div>
+	</div>
+	<header>
+		<h1>Shubra Qubala</h1>
+	</header>
+	<section style="position:relative">
+		<h1>Canals</h1>
+		<div style="position: absolute; right: 0; top: 28;">
+			<a id="newCanalButton" class="btn red" href="#">Add Canal</a>
+		</div>
+		<div>
+			<div id="newCanalWrapper" style="display:none"><input type="text" name="newCanalName" class="t" data-default="Type a name for the canal, then push ENTER." value="Type a name for the canal, then push ENTER." /><span id="newCanalStatus"></span></div>
+		</div>
+		<div id="canals"></div>
+		<section id="sensors">
+			<h2>Unknown Canal</h2>
+		</section>
+	</section>
+	<section style="position:relative">
+		<h1>Users</h1>
+		<div style="position: absolute; right: 0; top: 28;">
+			<a id="newUserButton" class="btn blue" href="#">Add User</a>
+		</div>
+		<div>
+			<div id="newUserWrapper" style="display:none">
+				<div><input type="text" name="userName" class="t input" data-default="Full Name" /></div>
+				<div><input type="text" name="userCell" class="t input" data-default="Cell Phone Number" /></div>
+				<h3>What canals should notify the user?</h3>
+				<div id="userCanals" style="margin-bottom:25px"></div>
+				<div style="position:relative">
+					<a id="newUserButtonPush" class="btn blue" href="#">Create</a>
+					<div id="newUserStatus" style="position:absolute; top:21px; left:125px; display:inline-block;"></div>
+				</div>
+			</div>
+		</div>
+		<div id="users"></div>
+	</section>
+</body>
+</html>
